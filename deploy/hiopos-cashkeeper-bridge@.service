@@ -1,0 +1,16 @@
+# Example systemd template: one instance per terminal, named after its host name.
+#   systemctl enable --now hiopos-cashkeeper-bridge@scale1
+[Unit]
+Description=HioPOS %i: send cash payments to the CashKeeper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=hiopos
+WorkingDirectory=/opt/hiopos-cashkeeper-bridge
+ExecStart=/opt/hiopos-cashkeeper-bridge/venv/bin/python vigila.py %i %i --ckfast 192.0.2.99 --state /var/lib/hiopos-printer/estat
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

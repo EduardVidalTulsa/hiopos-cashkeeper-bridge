@@ -1,0 +1,2 @@
+vncdotool>=1.2
+Pillow>=10
