@@ -12,14 +12,27 @@ does not touch the POS at all: it only looks at the screen.
 1. [droidVNC-NG](https://github.com/bk138/droidVNC-NG) runs on each terminal (start on boot,
    accessibility permission). Over Ethernet, ADB is not an option: wireless debugging needs Wi-Fi
    and `adb tcpip` is lost on every reboot.
-2. `vigila.py` keeps a VNC connection to the terminal, grabs the screen twice a second and runs
+2. `vigila.py` keeps a VNC connection to the terminal, grabs the screen twice a second (ten times during a payment) and runs
    OCR (tesseract) only when it changes, on a few fixed regions of the HioPOS 1280x720 layout:
    - payment screen: button bar `Cancel·lar / No imprimir / Imprimir`, `TOTAL A PAGAR` amount and
      payment method;
+   - payment method: the payment screen opens with `Efectiu` (cash) in the method field and the
+     list of methods dropped down; the shop assistant may pick another one and then confirms. The
+     field is only read while the list is closed (a dark grey block where the list drops down),
+     and the screen is polled every 0.1 s during a payment so the change is not missed. Reading the
+     default `Efectiu` with the list still open sent card payments as cash;
+   - amount: `TOTAL A PAGAR` read in 4 OCR variants plus the `Lliurat` field and the ticket
+     preview total; it is only sent if two independent sources agree (tesseract sometimes mixes up
+     5/9 and 9/0). It is read once per payment, not on every frame;
    - confirmation: when `Imprimir` or `No imprimir` is pressed the ticket preview dims (mean
-     brightness below 200); the payment method is read at that moment, because the payment screen
-     always opens with cash preselected;
-   - cancellation: going back to the sales screen sends nothing.
+     brightness below 200), then the shop assistants screen appears;
+   - cancellation: going back to the sales screen sends nothing, unless a ticket or card receipt
+     was printed (HioPOS sometimes goes back to the sales screen after a finished payment too).
+   - with `--tickets DIR` (the `tiquets/` directory of
+     [hiopos-virtual-printer](https://github.com/EduardVidalTulsa/hiopos-virtual-printer)), a
+     ticket printed for the payment decides the method and the exact amount, and an accepted card
+     terminal receipt means it was not cash. Customers who don't want a ticket leave only the
+     screen; if the method could not be seen there either, nothing is sent and Telegram is alerted.
 3. A confirmed cash payment is sent:
    - `--ckfast HOST[:PORT]`: straight to the **CKFast** connector of CKMonitor (port 16501),
      message `C|mYYYY-MM-DD:UUID:<uuid>|<cents>`, answer `OK|Added`;
@@ -66,6 +79,7 @@ Options:
 --vncpass FILE         VNC password file (default .vncpass)
 --state DIR            where the shop assistant's name is left (default estat/)
 --telegram FILE        'BOT_TOKEN CHAT_ID', alert when a payment cannot be read or sent
+--tickets DIR          hiopos-virtual-printer tiquets/ directory: printed tickets confirm method and amount
 ```
 
 `grava.py HOST VNCPASS_FILE OUTPUT_DIR [SECONDS]` saves a screenshot every time the screen changes.

@@ -8,7 +8,7 @@ Wants=network-online.target
 [Service]
 User=hiopos
 WorkingDirectory=/opt/hiopos-cashkeeper-bridge
-ExecStart=/opt/hiopos-cashkeeper-bridge/venv/bin/python vigila.py %i %i --ckfast 192.0.2.99 --state /var/lib/hiopos-printer/estat
+ExecStart=/opt/hiopos-cashkeeper-bridge/venv/bin/python vigila.py %i %i --ckfast 192.0.2.99 --state /var/lib/hiopos-printer/estat --tickets /var/lib/hiopos-printer/tiquets
 Restart=always
 RestartSec=10
 
