@@ -276,7 +276,11 @@ def decideix(p, estat):
     # With the method read on screen there is no waiting (no ticket if the customer doesn't want
     # one); without it, wait a little for the ticket or the card receipt. A ticket, if any, decides.
     venda, rebut = papers(p["t0"])
-    fi = time.time() + (0 if p["mitja"] or not args.tickets else 6)
+    # no waiting either with the list still open on cash: if it takes a few seconds the assistant
+    # starts a manual charge on CKMonitor and ours lands in the middle of it or right after, and
+    # CKMonitor gets stuck asking for money nobody will pay
+    defecte = p["obert"] and es_efectiu(p["defecte"])
+    fi = time.time() + (0 if p["mitja"] or defecte or not args.tickets else 6)
     while venda is None and not rebut and time.time() < fi:
         time.sleep(0.5)
         venda, rebut = papers(p["t0"])
