@@ -20,7 +20,9 @@ does not touch the POS at all: it only looks at the screen.
      list of methods dropped down; the shop assistant may pick another one and then confirms. The
      field is only read while the list is closed (a dark grey block where the list drops down),
      and the screen is polled every 0.1 s during a payment so the change is not missed. Reading the
-     default `Efectiu` with the list still open sent card payments as cash;
+     default `Efectiu` with the list still open sent card payments as cash. But if the payment is
+     confirmed with the list still open (the assistant pressed a button straight away), nothing
+     else was picked and the default `Efectiu` holds; a printed ticket or card receipt still wins;
    - amount: `TOTAL A PAGAR` read in 4 OCR variants plus the `Lliurat` field and the ticket
      preview total; it is only sent if two independent sources agree (tesseract sometimes mixes up
      5/9 and 9/0). It is read once per payment, not on every frame;

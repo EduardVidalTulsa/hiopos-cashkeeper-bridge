@@ -243,7 +243,8 @@ def classifica(im):
 
 def nou_cobrament():
     return {"t0": time.time(), "import": None, "det": "", "text": None, "mitja": None, "fet": False,
-            "barra": None, "k_imp": None, "k_mitja": None}
+            "barra": None, "k_imp": None, "k_mitja": None,
+            "obert": False, "defecte": None, "k_def": None}
 
 
 def actualitza(p, im, estat):
@@ -257,7 +258,13 @@ def actualitza(p, im, estat):
             p["import"], p["det"] = llegeix_import(im)
             p["text"], p["k_imp"] = ocr(im, TOTAL), k
             apunta_venedor(im)
-    if not menu_obert(im):
+    # confirming with the list still open means nothing else was picked: the default (cash) holds
+    p["obert"] = menu_obert(im)
+    if p["obert"]:
+        k = im.crop(MITJA).tobytes()
+        if k != p["k_def"]:
+            p["defecte"], p["k_def"] = ocr(im, MITJA) or None, k
+    else:
         k = im.crop(MITJA).tobytes()
         if k != p["k_mitja"]:
             p["mitja"], p["k_mitja"] = ocr(im, MITJA) or None, k
@@ -284,6 +291,9 @@ def decideix(p, estat):
         font, efectiu = "card terminal receipt", False
     elif p["mitja"]:
         font, efectiu = f"screen {p['mitja']}", es_efectiu(p["mitja"])
+    elif p["obert"] and es_efectiu(p["defecte"]):
+        # confirmed without closing the methods list: nothing else was picked and the field said cash
+        font, efectiu = f"default {p['defecte']} (list still open)", True
     else:
         font, efectiu = "nothing", None
     log(f"confirmed ({estat}): {p['text']} amount={c} {det} method from {font}")
