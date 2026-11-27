@@ -14,9 +14,9 @@
 #
 # usage: vigila.py NAME HOST [--ckfast HOST[:PORT] | --sql MYCNF | --cmd "CMD {cents}"] [options]
 #        without a sender it only logs (dry run)
-import argparse, glob, os, re, socket, subprocess, sys, tempfile, time, uuid, warnings, logging
+import argparse, glob, os, re, socket, subprocess, sys, tempfile, textwrap, threading, time, uuid, warnings, logging
 from collections import Counter
-from datetime import date
+from datetime import date, datetime
 from PIL import Image, ImageChops, ImageOps, ImageStat
 from vncdotool import api
 
@@ -33,6 +33,14 @@ env.add_argument("--sql", metavar="MYCNF",
 env.add_argument("--cmd", help="run a command instead; {cents} and {text} are replaced")
 ap.add_argument("--sql-db", default="cashkeeper", help="database for --sql (default cashkeeper)")
 ap.add_argument("--sql-table", default="cashkeeper", help="queue table for --sql: (uuid, total)")
+ap.add_argument("--sql-confirm", type=int, default=0, metavar="SECONDS",
+                help="with --sql: wait this long for the queue processor to record the CashKeeper's answer "
+                     "(columns --sql-sent-col / --sql-reply-col, row key id) and alert if it is not OK")
+ap.add_argument("--sql-sent-col", default="sent", help="queue column set to 1 once processed (default sent)")
+ap.add_argument("--sql-reply-col", default="reply", help="queue column with the CashKeeper's answer (default reply)")
+ap.add_argument("--alert-printer", metavar="HOST[:PORT]",
+                help="ESC/POS printer (or hiopos-virtual-printer) that prints a 2-beep notice when a "
+                     "payment is doubtful or the CashKeeper did not confirm it")
 ap.add_argument("--no-1cent", action="store_true",
                 help="the cash machine has no 1 cent coins: amounts ending in 1, 6 or 9 cents go 1 cent down")
 ap.add_argument("--state", default="estat",
@@ -141,6 +149,57 @@ def ckfast(total):
     return resposta
 
 
+def alert_print(reason, lines=(), footer="If it was cash, take it by hand on the CashKeeper."):
+    """Printed notice: 2 beeps and an inverted banner "DOUBTFUL PAYMENT" with the terminal name, the
+    reason and what was read. Sent raw to --alert-printer; never raises."""
+    if not args.alert_printer:
+        return
+    try:
+        host, _, port = args.alert_printer.partition(":")
+        m = re.search(r"(\d+)\D*$", nom)
+        who = "TERMINAL " + (m.group(1) if m else nom.upper())
+        body = [reason] + [l for l in lines if l] + [datetime.now().strftime("%H:%M:%S")]
+        text = "\n".join(textwrap.fill(l, 42) for l in body)
+        data = (b"\x1b@\x1bt\x13" + b"\x1bB\x02\x02"                 # buzzer: 2 beeps
+                + b"\x1ba\x01" + b"\x1d!\x11\x1dB\x01"                  # centered, double size, inverted
+                + b" DOUBTFUL PAYMENT \n" + f" {who} \n".encode("cp858", "replace")
+                + b"\x1dB\x00\x1d!\x00\x1ba\x00\n"
+                + text.encode("cp858", "replace") + b"\n\n"
+                + textwrap.fill(footer, 42).encode("cp858", "replace") + b"\n" * 5 + b"\x1dVB\x00")
+        with socket.create_connection((host, int(port or 9100)), 3) as sk:
+            sk.sendall(data)
+        log("alert printed")
+    except Exception as e:
+        log(f"could not print the alert: {e!r}")
+
+
+def confirm_queue(id_, total, text):
+    """--sql-confirm: the queue processor must record the CashKeeper's OK answer in the row. No OK in
+    time, or an error answer, raises an alert (some processors mark any answer as sent and never retry)."""
+    sent, reply = "", ""
+    fi = time.time() + args.sql_confirm
+    while time.time() < fi:
+        try:
+            out = subprocess.run(["mariadb", f"--defaults-extra-file={args.sql}", "-N", "-D", args.sql_db, "-e",
+                                  f"SELECT `{args.sql_sent_col}`, IFNULL(`{args.sql_reply_col}`,'') "
+                                  f"FROM `{args.sql_table}` WHERE id={int(id_)}"],
+                                 capture_output=True, text=True, check=True).stdout.strip()
+            sent, _, reply = out.partition("\t")
+        except Exception:
+            sent = ""
+        if sent == "1":
+            break
+        time.sleep(1)
+    if sent == "1" and reply.startswith("OK"):
+        log(f"CashKeeper confirmed {total} cents ({reply})")
+        return
+    why = f"CashKeeper answered: {reply}" if sent == "1" else f"CashKeeper did not confirm in {args.sql_confirm} s ({reply or 'no answer'})"
+    log(f"ALERT: {why} for {total} cents ({text})")
+    telegram(f"{nom}: cash payment {text} NOT confirmed by the CashKeeper. {why}. Check CKMonitor before charging it by hand.")
+    alert_print("Payment NOT confirmed by the CashKeeper", [f"Amount: {text}", why],
+                "Check CKMonitor before charging it by hand.")
+
+
 def envia(total, text):
     if args.no_1cent and total % 10 in (1, 6, 9):
         total -= 1
@@ -148,10 +207,13 @@ def envia(total, text):
         if args.ckfast:
             log(f"SENT to the CashKeeper {total} cents ({text}): {ckfast(total)}")
         elif args.sql:
-            subprocess.run(["mariadb", f"--defaults-extra-file={args.sql}", "-N", "-D", args.sql_db, "-e",
-                            f"INSERT INTO `{args.sql_table}` (uuid,total) VALUES (UUID(),{total})"],
-                           capture_output=True, text=True, check=True)
+            id_ = subprocess.run(["mariadb", f"--defaults-extra-file={args.sql}", "-N", "-D", args.sql_db, "-e",
+                                  f"INSERT INTO `{args.sql_table}` (uuid,total) VALUES (UUID(),{total}); "
+                                  "SELECT LAST_INSERT_ID()"],
+                                 capture_output=True, text=True, check=True).stdout.strip()
             log(f"QUEUED for the CashKeeper {total} cents ({text})")
+            if args.sql_confirm:
+                threading.Thread(target=confirm_queue, args=(id_, total, text), daemon=True).start()
         elif args.cmd:
             subprocess.run(args.cmd.format(cents=total, text=text), shell=True, check=True)
             log(f"command run for {total} cents ({text})")
@@ -160,6 +222,7 @@ def envia(total, text):
     except Exception as e:
         log(f"ERROR sending {total} cents: {e!r}")
         telegram(f"{nom}: could not send the cash payment {text} to the CashKeeper: {e}")
+        alert_print("Cash payment NOT sent to the CashKeeper", [f"Amount: {text}", str(e)[:80]])
 
 
 def apunta_venedor(im):
@@ -304,12 +367,14 @@ def decideix(p, estat):
     if efectiu is None:
         telegram(f"{nom}: payment of {p['text']} confirmed but the payment method could not be seen: if it was cash, take it by hand")
         log("NOT SENT: payment method not seen")
+        alert_print("Payment method not seen", [f"Amount read: {p['text']}"])
     elif efectiu:
         if c:
             envia(c, f"{c // 100},{c % 100:02d} €")
         else:
             telegram(f"{nom}: cash payment confirmed but the amount readings disagree ({det}): take it by hand")
             log(f"NOT SENT: amount readings disagree ({det})")
+            alert_print("Amount readings disagree", [f"Amount read: {p['text']}", str(det)])
 
 
 def bucle(client, st):

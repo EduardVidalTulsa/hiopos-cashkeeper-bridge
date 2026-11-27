@@ -42,7 +42,16 @@ does not touch the POS at all: it only looks at the screen.
      something else;
    - `--cmd "program {cents}"`: any command;
    - with none of them it only logs (dry run).
-4. If the VNC connection stalls (it happens), a 10 s timeout reconnects; a payment seen before
+4. **Nothing is left pending.** A payment that is doubtful (method not seen, amount readings that
+   disagree) is not sent, and with `--alert-printer` a notice is printed with 2 beeps and an
+   inverted banner `DOUBTFUL PAYMENT` with the terminal, the reason and what was read, besides the
+   Telegram alert. With `--sql` plus `--sql-confirm SECONDS` the watcher also checks that the queue
+   processor recorded the CashKeeper's `OK` answer (`--sql-sent-col`, `--sql-reply-col`); no `OK` in
+   time, or an error answer, prints the same notice and sends Telegram. This matters because a
+   queue processor may mark any answer as sent and never retry. If the CashKeeper is down the row
+   stays queued and may arrive late: check CKMonitor before charging by hand, or it will be
+   charged twice. With `--ckfast` the `OK|Added` answer is checked on the spot.
+5. If the VNC connection stalls (it happens), a 10 s timeout reconnects; a payment seen before
    the drop is still sent if it is found confirmed afterwards.
 
 It also writes the shop assistant's name (`Venedor:` in the ticket preview) to
@@ -81,6 +90,8 @@ Options:
 --vncpass FILE         VNC password file (default .vncpass)
 --state DIR            where the shop assistant's name is left (default estat/)
 --telegram FILE        'BOT_TOKEN CHAT_ID', alert when a payment cannot be read or sent
+--alert-printer H[:P]  ESC/POS printer (or hiopos-virtual-printer): 2-beep notice for doubtful payments
+--sql-confirm SECONDS  with --sql, wait for the queue processor's OK answer (--sql-sent-col, --sql-reply-col)
 --tickets DIR          hiopos-virtual-printer tiquets/ directory: printed tickets confirm method and amount
 ```
 
